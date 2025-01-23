@@ -1,0 +1,125 @@
+import pandas as pd
+import sqlite3
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+data_path = "user_journey_metrics.csv"  
+data = pd.read_csv(data_path)
+
+data["date"] = pd.to_datetime(data["date"], format="%Y-%m-%d")
+
+data.fillna({"DAU": 0, "bookings": 0, "total_users": 0}, inplace=True)
+
+stages = ["home", "lister", "hdp", "pp", "pah"]
+for stage in stages:
+    stage_dau_column = f"{stage}_dau"
+    data[stage_dau_column] = data["DAU"] * data[f"{stage}_percentage"] / 100  # Assuming percentages exist
+
+conn = sqlite3.connect(":memory:")
+
+data.to_sql("user_journey_metrics", conn, if_exists="replace", index=False)
+
+query = """
+SELECT 
+    date,
+    SUM(home_dau) AS home_dau,
+    SUM(lister_dau) AS lister_dau,
+    SUM(hdp_dau) AS hdp_dau,
+    SUM(pp_dau) AS pp_dau,
+    SUM(pah_dau) AS pah_dau,
+    SUM(bookings) AS total_bookings
+FROM user_journey_metrics
+GROUP BY date
+ORDER BY date;
+"""
+
+stagewise_results = pd.read_sql_query(query, conn)
+
+# Display the results
+print("Stagewise Metrics by Date:")
+print(stagewise_results.head())
+
+comparison_days = ["2025-01-20", "2025-01-13", "2025-01-06"]  # Replace with actual dates from the data
+comparison_data = stagewise_results[stagewise_results["date"].isin(comparison_days)]
+
+# Visualization: DAU Trends for Specific Stages
+plt.figure(figsize=(14, 7))
+for stage in ["home_dau", "lister_dau", "hdp_dau", "pp_dau", "pah_dau"]:
+    sns.lineplot(x="date", y=stage, data=stagewise_results, label=stage)
+
+plt.title("DAU Trends by Stage Over Time", fontsize=16)
+plt.xlabel("Date", fontsize=12)
+plt.ylabel("DAU", fontsize=12)
+plt.legend(title="Stages")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Comparison Visualization: DAU for D-Day, D-7, and D-14
+plt.figure(figsize=(12, 6))
+comparison_data_melted = comparison_data.melt(
+    id_vars="date", value_vars=["home_dau", "lister_dau", "hdp_dau", "pp_dau", "pah_dau"], 
+    var_name="stage", value_name="DAU"
+)
+sns.barplot(
+    x="stage", y="DAU", hue="date", data=comparison_data_melted, palette="muted"
+)
+plt.title("DAU Comparison for D-Day, D-7, and D-14", fontsize=16)
+plt.xlabel("Stage", fontsize=12)
+plt.ylabel("DAU", fontsize=12)
+plt.legend(title="Date")
+plt.xticks(rotation=45, ha="right")
+plt.tight_layout()
+plt.show()
+
+# Close the SQLite connection
+conn.close()
+
+# Additional Insights: Drop-Off Analysis by Stage
+def calculate_drop_off(data, stages):
+    drop_off_results = {}
+    for i in range(len(stages) - 1):
+        stage_1 = stages[i]
+        stage_2 = stages[i + 1]
+        drop_off_rate = (1 - data[f"{stage_2}_dau"] / data[f"{stage_1}_dau"]) * 100
+        drop_off_results[f"{stage_1}_to_{stage_2}_drop"] = drop_off_rate.mean()
+    return drop_off_results
+
+drop_off_metrics = calculate_drop_off(stagewise_results, ["home_dau", "lister_dau", "hdp_dau", "pp_dau", "pah_dau"])
+print("Drop-Off Metrics:")
+print(drop_off_metrics)
+
+drop_off_query = """
+WITH stage_totals AS (
+    SELECT 
+        stage,
+        SUM(DAU) AS total_dau
+    FROM user_journey_metrics
+    GROUP BY stage
+),
+next_stage_totals AS (
+    SELECT 
+        stage,
+        LEAD(stage) OVER (ORDER BY stage) AS next_stage,
+        SUM(DAU) AS dau_to_next_stage
+    FROM user_journey_metrics
+    GROUP BY stage, next_stage
+)
+SELECT 
+    st.stage,
+    st.total_dau,
+    nst.next_stage,
+    nst.dau_to_next_stage,
+    (1 - nst.dau_to_next_stage * 1.0 / st.total_dau) * 100 AS drop_off_rate
+FROM stage_totals st
+LEFT JOIN next_stage_totals nst ON st.stage = nst.stage
+ORDER BY st.stage;
+"""
+
+# Execute drop-off analysis query
+drop_off_results = pd.read_sql_query(drop_off_query, conn)
+print("Drop-off Analysis:")
+print(drop_off_results)
+
+
+##Cant share real data because of company guidelines
