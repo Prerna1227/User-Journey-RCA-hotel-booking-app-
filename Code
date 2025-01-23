@@ -121,5 +121,3 @@ drop_off_results = pd.read_sql_query(drop_off_query, conn)
 print("Drop-off Analysis:")
 print(drop_off_results)
 
-
-##Cant share real data because of company guidelines
